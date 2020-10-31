@@ -6,8 +6,8 @@ import random
 translator = Translator()
 
 def translateSentence(sentence):
-#   languages = ['es', 'hi', 'zh-CN', 'ja', 'ta','ko', 'fr', 'ru', 'it' ,'de', 'vi']
-    languages = ['hi']
+    languages = ['es', 'hi', 'zh-CN', 'ja', 'ta','ko', 'fr', 'ru', 'it' ,'de', 'vi']
+    # languages = ['hi']
     translation = translator.translate(sentence, dest=random.choice(languages))
     return translation.text
 
