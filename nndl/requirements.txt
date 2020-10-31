@@ -215,6 +215,8 @@ pytest-astropy-header==0.1.2
 pytest-doctestplus==0.5.0
 pytest-openfiles==0.4.0
 pytest-remotedata==0.3.2
+pythainlp==2.2.4
+python-crfsuite==0.9.7
 python-dateutil==2.8.1
 python-dotenv==0.14.0
 python-jsonrpc-server==0.3.4
@@ -279,6 +281,7 @@ testpath==0.4.4
 textblob==0.15.3
 tf-slim==1.1.0
 thinc==7.0.8
+tinydb==4.2.0
 toolz==0.10.0
 torch==1.6.0
 tornado==6.0.3
