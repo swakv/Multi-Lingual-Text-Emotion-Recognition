@@ -5,7 +5,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.initializers import TruncatedNormal
 from tensorflow.keras.losses import CategoricalCrossentropy, SparseCategoricalCrossentropy
-from tensorflow.keras.metrics import CategoricalAccuracy, SparseCategoricalAccuracy
+from tensorflow.keras.metrics import CategoricalAccuracy, Accuracy
 from tensorflow.keras.utils import to_categorical
 import pandas as pd
 import tensorflow as tf
@@ -59,8 +59,8 @@ with strategy.scope():
 
     optimizer = Adam(learning_rate=0.0001, decay=0.01)
 
-    loss = {'emotion': SparseCategoricalCrossentropy(from_logits = False)}
-    metric = {'emotion': SparseCategoricalAccuracy('accuracy')}
+    loss = {'emotion': CategoricalCrossentropy(from_logits = False)}
+    metric = {'emotion': CategoricalAccuracy('accuracy')}
 
 model.compile(
     optimizer = optimizer,
@@ -68,10 +68,22 @@ model.compile(
     metrics = metric)
 
 y_emotion = to_categorical(train['Emotion'], 7)
-print(y_emotion)
+val_emotion = to_categorical(valid['Emotion'], 7)
+# print(y_emotion)
 
 x = tokenizer(
     text=train['Comment'].to_list(),
+    add_special_tokens=True,
+    max_length=max_length,
+    truncation=True,
+    padding=True, 
+    return_tensors='tf',
+    return_token_type_ids = False,
+    return_attention_mask = False,
+    verbose = True)
+
+x_val = tokenizer(
+    text=valid['Comment'].to_list(),
     add_special_tokens=True,
     max_length=max_length,
     truncation=True,
@@ -85,7 +97,7 @@ x = tokenizer(
 history = model.fit(
     x={'input_ids': x['input_ids']},
     y={'emotion': y_emotion},
-    validation_data=(valid['Comment'], valid['Emotion']),
+    validation_data=(x_val['input_ids'], val_emotion),
     batch_size=32,
     epochs=10)
 
