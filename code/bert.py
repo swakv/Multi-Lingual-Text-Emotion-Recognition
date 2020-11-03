@@ -67,8 +67,8 @@ model.compile(
     loss = loss, 
     metrics = metric)
 
-y_emotion = to_categorical(train['Emotion'], 7)
-val_emotion = to_categorical(valid['Emotion'], 7)
+y_emotion = to_categorical(train['Emotion'])
+val_emotion = to_categorical(valid['Emotion'])
 # print(y_emotion)
 
 x = tokenizer(
