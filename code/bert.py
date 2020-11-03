@@ -4,8 +4,8 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.initializers import TruncatedNormal
-from tensorflow.keras.losses import CategoricalCrossentropy
-from tensorflow.keras.metrics import CategoricalAccuracy
+from tensorflow.keras.losses import CategoricalCrossentropy, SparseCategoricalCrossentropy
+from tensorflow.keras.metrics import CategoricalAccuracy, SparseCategoricalAccuracy
 from tensorflow.keras.utils import to_categorical
 import pandas as pd
 import tensorflow as tf
@@ -33,31 +33,34 @@ test = pd.read_csv('/kaggle/input/dataset/test.csv')
 
 model_name = 'bert-base-multilingual-cased'
 max_length = 200
-config = BertConfig.from_pretrained(model_name)
-config.output_hidden_states = False
-tokenizer = BertTokenizerFast.from_pretrained(pretrained_model_name_or_path = model_name, config = config)
-transformer_model = TFBertModel.from_pretrained(model_name, config = config)
 
-bert = transformer_model.layers[0]
-input_ids = Input(shape=(max_length,), name='input_ids', dtype='int32')
-inputs = {'input_ids': input_ids}
+with strategy.scope():
+    
+    config = BertConfig.from_pretrained(model_name)
+    config.output_hidden_states = False
+    tokenizer = BertTokenizerFast.from_pretrained(pretrained_model_name_or_path = model_name, config = config)
+    transformer_model = TFBertModel.from_pretrained(model_name, config = config)
 
-bert_model = bert(inputs)[1]
-# dropout = Dropout(config.hidden_dropout_prob, name='pooled_output')
-dropout = Dropout(rate=0.05, name='pooled_output')
-pooled_output = dropout(bert_model, training=False)
+    bert = transformer_model.layers[0]
+    input_ids = Input(shape=(max_length,), name='input_ids', dtype='int32')
+    inputs = {'input_ids': input_ids}
 
-emotion = Dense(units=len(train.Emotion.value_counts()), kernel_initializer=TruncatedNormal(stddev=config.initializer_range), name='emotion')(pooled_output)
-outputs = {'emotion': emotion}
+    bert_model = bert(inputs)[1]
+    # dropout = Dropout(config.hidden_dropout_prob, name='pooled_output')
+    dropout = Dropout(rate=0.05, name='pooled_output')
+    pooled_output = dropout(bert_model, training=False)
 
-model = Model(inputs=inputs, outputs=outputs, name='BERT_MultiClass')
+    emotion = Dense(units=len(train.Emotion.value_counts()), kernel_initializer=TruncatedNormal(stddev=config.initializer_range), name='emotion')(pooled_output)
+    outputs = {'emotion': emotion}
 
-model.summary()
+    model = Model(inputs=inputs, outputs=outputs)
 
-optimizer = Adam(learning_rate=0.0001, epsilon=1e-08, decay=0.01, clipnorm=1.0)
+    model.summary()
 
-loss = {'emotion': CategoricalCrossentropy(from_logits = True)}
-metric = {'emotion': CategoricalAccuracy('accuracy')}
+    optimizer = Adam(learning_rate=0.0001, decay=0.01)
+
+    loss = {'emotion': SparseCategoricalCrossentropy(from_logits = False)}
+    metric = {'emotion': SparseCategoricalAccuracy('accuracy')}
 
 model.compile(
     optimizer = optimizer,
@@ -65,6 +68,7 @@ model.compile(
     metrics = metric)
 
 y_emotion = to_categorical(train['Emotion'], 7)
+print(y_emotion)
 
 x = tokenizer(
     text=train['Comment'].to_list(),
