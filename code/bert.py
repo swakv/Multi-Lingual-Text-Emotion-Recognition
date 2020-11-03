@@ -1,18 +1,25 @@
-from transformers import TFBertModel,  BertConfig, BertTokenizerFast
-from tensorflow.keras.layers import Input, Dropout, Dense
-from tensorflow.keras.models import Model
+import numpy as np 
+import pandas as pd 
+from tqdm import tqdm
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping
-from tensorflow.keras.initializers import TruncatedNormal
-from tensorflow.keras.losses import CategoricalCrossentropy, SparseCategoricalCrossentropy
-from tensorflow.keras.metrics import CategoricalAccuracy, Accuracy
-from tensorflow.keras.utils import to_categorical
-import pandas as pd
 import tensorflow as tf
+from keras.models import Sequential
+from keras.layers.recurrent import LSTM, GRU,SimpleRNN
+from tensorflow.keras.models import Model
+from keras.layers.core import Dense, Activation, Dropout
+from keras.layers.embeddings import Embedding
+from keras.layers.normalization import BatchNormalization
+from keras.utils import np_utils
+from sklearn import preprocessing, decomposition, model_selection, metrics, pipeline
+from keras.layers import GlobalMaxPooling1D, Conv1D, MaxPooling1D, Flatten, Bidirectional, SpatialDropout1D
+from keras.preprocessing import sequence, text
+from keras.callbacks import EarlyStopping
+from transformers import TFBertModel,  BertConfig, BertTokenizerFast
+
 
 try:
-    # TPU detection. No parameters necessary if TPU_NAME environment variable is
-    # set: this is always the case on Kaggle.
     tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
     print('Running on TPU ', tpu.master())
 except ValueError:
@@ -23,58 +30,30 @@ if tpu:
     tf.tpu.experimental.initialize_tpu_system(tpu)
     strategy = tf.distribute.experimental.TPUStrategy(tpu)
 else:
-    # Default distribution strategy in Tensorflow. Works on CPU and single GPU.
     strategy = tf.distribute.get_strategy()
-    
+
 
 train = pd.read_csv('/kaggle/input/dataset/train.csv')
 valid = pd.read_csv('/kaggle/input/dataset/val.csv')
 test = pd.read_csv('/kaggle/input/dataset/test.csv')
 
-model_name = 'bert-base-multilingual-cased'
-max_length = 200
+AUTO = tf.data.experimental.AUTOTUNE
 
-with strategy.scope():
-    
-    config = BertConfig.from_pretrained(model_name)
-    config.output_hidden_states = False
-    tokenizer = BertTokenizerFast.from_pretrained(pretrained_model_name_or_path = model_name, config = config)
-    transformer_model = TFBertModel.from_pretrained(model_name, config = config)
+EPOCHS = 3
+BATCH_SIZE = 16 * strategy.num_replicas_in_sync
+MAX_LEN = 168
 
-    bert = transformer_model.layers[0]
-    input_ids = Input(shape=(max_length,), name='input_ids', dtype='int32')
-    inputs = {'input_ids': input_ids}
+xtrain, ytrain = train.Comment.values, train.Emotion.values
+xvalid, yvalid = valid.Comment.values, valid.Emotion.values
+xtest, ytest = test.Comment.values, test.Emotion.values
 
-    bert_model = bert(inputs)[1]
-    # dropout = Dropout(config.hidden_dropout_prob, name='pooled_output')
-    dropout = Dropout(rate=0.05, name='pooled_output')
-    pooled_output = dropout(bert_model, training=False)
+tokenizer = BertTokenizerFast.from_pretrained(pretrained_model_name_or_path = 'bert-base-multilingual-cased')
+max_len = 200
 
-    emotion = Dense(units=len(train.Emotion.value_counts()), kernel_initializer=TruncatedNormal(stddev=config.initializer_range), name='emotion')(pooled_output)
-    outputs = {'emotion': emotion}
-
-    model = Model(inputs=inputs, outputs=outputs)
-
-    model.summary()
-
-    optimizer = Adam(learning_rate=0.0001, decay=0.01)
-
-    loss = {'emotion': CategoricalCrossentropy(from_logits = False)}
-    metric = {'emotion': CategoricalAccuracy('accuracy')}
-
-model.compile(
-    optimizer = optimizer,
-    loss = loss, 
-    metrics = metric)
-
-y_emotion = to_categorical(train['Emotion'])
-val_emotion = to_categorical(valid['Emotion'])
-# print(y_emotion)
-
-x = tokenizer(
+xtrain_pad = tokenizer(
     text=train['Comment'].to_list(),
     add_special_tokens=True,
-    max_length=max_length,
+    max_length=max_len,
     truncation=True,
     padding=True, 
     return_tensors='tf',
@@ -82,10 +61,10 @@ x = tokenizer(
     return_attention_mask = False,
     verbose = True)
 
-x_val = tokenizer(
+xvalid_pad = tokenizer(
     text=valid['Comment'].to_list(),
     add_special_tokens=True,
-    max_length=max_length,
+    max_length=max_len,
     truncation=True,
     padding=True, 
     return_tensors='tf',
@@ -93,24 +72,39 @@ x_val = tokenizer(
     return_attention_mask = False,
     verbose = True)
 
+def build_model(transformer):
+    input_ids = Input(shape=(max_len,), dtype=tf.int32, name="input_ids")
+    sequence_output = transformer(input_ids)[0]
+    cls_token = sequence_output[:, 0, :]
+    out = Dense(7, activation='softmax')(cls_token)
 
-history = model.fit(
-    x={'input_ids': x['input_ids']},
-    y={'emotion': y_emotion},
-    validation_data=(x_val['input_ids'], val_emotion),
-    batch_size=32,
-    epochs=10)
+    model = Model(inputs=input_ids, outputs=out)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    model.compile(Adam(lr=1e-5), loss=loss, metrics=['accuracy'])
+
+    return model
+
+metrics = [tf.keras.metrics.SparseCategoricalAccuracy('accuracy', dtype=tf.float32)]
+loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+with strategy.scope():
+    model_name = 'bert-base-multilingual-cased'
+    config = BertConfig.from_pretrained(model_name)
+    config.output_hidden_states = False
+    transformer_model = TFBertModel.from_pretrained(model_name, config = config)
+    model = build_model(transformer_model)
+    
+model.summary()
+
+
+model.fit(xtrain_pad['input_ids'], ytrain,epochs=80, validation_data= (xvalid_pad['input_ids'], yvalid), batch_size=128*strategy.num_replicas_in_sync) #Multiplying by Strategy to run on TPU's
 
 model.save('bert_model.h5')
 
-print("done")
-
-
-test_y_emotion = to_categorical(test['Emotion'])
 test_x = tokenizer(
     text=test['Comment'].to_list(),
     add_special_tokens=True,
-    max_length=max_length,
+    max_length=max_len,
     truncation=True,
     padding=True, 
     return_tensors='tf',
@@ -120,5 +114,5 @@ test_x = tokenizer(
 
 model_eval = model.evaluate(
     x={'input_ids': test_x['input_ids']},
-    y={'emotion': test_y_emotion}
+    y={'emotion': ytest}
 )

@@ -35,14 +35,9 @@ else:
     # Default distribution strategy in Tensorflow. Works on CPU and single GPU.
     strategy = tf.distribute.get_strategy()
 
-print("REPLICAS: ", strategy.num_replicas_in_sync)
+# print("REPLICAS: ", strategy.num_replicas_in_sync)
 
-model_name = 'bert-base-multilingual-cased'
 
-config = BertConfig.from_pretrained(model_name)
-config.output_hidden_states = False
-tokenizer = BertTokenizerFast.from_pretrained(pretrained_model_name_or_path = model_name, config = config)
-transformer_model = TFBertModel.from_pretrained(model_name, config = config)
 
 train = pd.read_csv('/kaggle/input/dataset/train.csv')
 valid = pd.read_csv('/kaggle/input/dataset/val.csv')
@@ -58,26 +53,52 @@ EPOCHS = 3
 BATCH_SIZE = 16 * strategy.num_replicas_in_sync
 MAX_LEN = 168
 
-xtrain, xvalid, ytrain, yvalid = train_test_split(train.Comment.values, train.Emotion.values, 
-                                                  stratify=train.Emotion.values, 
-                                                  random_state=42, 
-                                                  test_size=0.2, shuffle=True)
+# xtrain, xvalid, ytrain, yvalid = train_test_split(train.Comment.values, train.Emotion.values, 
+#                                                   stratify=train.Emotion.values, 
+#                                                   random_state=42, 
+#                                                   test_size=0.2, shuffle=True)
 
-train['Comment'].apply(lambda x:len(str(x).split())).max()
+xtrain, ytrain = train.Comment.values, train.Emotion.values
+xvalid, yvalid = valid.Comment.values, valid.Emotion.values
+# print(xtrain.shape, ytrain.shape)
+# train['Comment'].apply(lambda x:len(str(x).split())).max()
 
 # using keras tokenizer here
-token = text.Tokenizer(num_words=None)
-max_len = 168
+# token = text.Tokenizer(num_words=None)
+tokenizer = BertTokenizerFast.from_pretrained(pretrained_model_name_or_path = 'bert-base-multilingual-cased')
+max_len = 200
 
-token.fit_on_texts(list(xtrain) + list(xvalid))
-xtrain_seq = token.texts_to_sequences(xtrain)
-xvalid_seq = token.texts_to_sequences(xvalid)
+# token.fit_on_texts(list(xtrain) + list(xvalid))
+# xtrain_seq = token.texts_to_sequences(xtrain)
+# xvalid_seq = token.texts_to_sequences(xvalid)
 
-#zero pad the sequences
-xtrain_pad = sequence.pad_sequences(xtrain_seq, maxlen=max_len)
-xvalid_pad = sequence.pad_sequences(xvalid_seq, maxlen=max_len)
+# #zero pad the sequences
+# xtrain_pad = sequence.pad_sequences(xtrain_seq, maxlen=max_len)
+# xvalid_pad = sequence.pad_sequences(xvalid_seq, maxlen=max_len)
 
-word_index = token.word_index
+# word_index = token.word_index
+
+xtrain_pad = tokenizer(
+    text=train['Comment'].to_list(),
+    add_special_tokens=True,
+    max_length=max_len,
+    truncation=True,
+    padding=True, 
+    return_tensors='tf',
+    return_token_type_ids = False,
+    return_attention_mask = False,
+    verbose = True)
+# print(xtrain_pad)
+xvalid_pad = tokenizer(
+    text=valid['Comment'].to_list(),
+    add_special_tokens=True,
+    max_length=max_len,
+    truncation=True,
+    padding=True, 
+    return_tensors='tf',
+    return_token_type_ids = False,
+    return_attention_mask = False,
+    verbose = True)
 
 def build_model(transformer):
     input_ids = Input(shape=(max_len,), dtype=tf.int32, name="input_ids")
@@ -95,17 +116,15 @@ metrics = [tf.keras.metrics.SparseCategoricalAccuracy('accuracy', dtype=tf.float
 loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
 
 with strategy.scope():
-    # A simpleRNN without any pretrained embeddings and one dense layer
-    model = Sequential()
-    model.add(Embedding(len(word_index) + 1,300,input_length=max_len))
-    model.add(SimpleRNN(100))
-    model.add(Dense(7, activation='softmax'))
-    model.compile(loss=loss, optimizer='adam', metrics=['accuracy'])
-    # model = build_model(transformer_model)
+    model_name = 'bert-base-multilingual-cased'
+    config = BertConfig.from_pretrained(model_name)
+    config.output_hidden_states = False
+    transformer_model = TFBertModel.from_pretrained(model_name, config = config)
+    model = build_model(transformer_model)
     
 model.summary()
 
 
-model.fit(xtrain_pad, ytrain,epochs=10, batch_size=64*strategy.num_replicas_in_sync) #Multiplying by Strategy to run on TPU's
+model.fit(xtrain_pad['input_ids'], ytrain,epochs=10, batch_size=64*strategy.num_replicas_in_sync) #Multiplying by Strategy to run on TPU's
 
-model.evaluate(xvalid_pad, yvalid)
+model.evaluate(xvalid_pad['input_ids'], yvalid)
